@@ -716,10 +716,11 @@ AsyncTask taskKeypad(100, true, []() {
 
 AsyncTask taskRFID(100, true, []() {
   if (stateMachine.GetState() == STATE_MONITORING) {
-    SystemInput rfidInput = rfid.checkCards();
-    if (rfidInput != INPUT_UNKNOWN) {
-      currentInput = rfidInput;
-    }
+    rfid.writeValueToCard(1);
+    //SystemInput rfidInput = rfid.checkCards();
+    //if (rfidInput != INPUT_UNKNOWN) {
+    //  currentInput = rfidInput;
+    //}
   }
 });
 
@@ -980,7 +981,6 @@ void loop() {
   taskLEDs.Update();
   taskBuzzer.Update();
   taskFan.Update();
-  
   // Actualizar managers
   alarms.update();
   

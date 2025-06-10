@@ -52,8 +52,8 @@ namespace Config {
   
   // Umbrales de sensores
   const float HIGH_TEMP_THRESHOLD = 40.0;
-  const float ALARM_TEMP_THRESHOLD = 40.0;  
-  const int LOW_LIGHT_THRESHOLD = 10;
+  const float ALARM_TEMP_THRESHOLD = 20.0;  
+  const int LOW_LIGHT_THRESHOLD = 30;
   
   // Timeouts (milisegundos)
   const unsigned long STABILIZATION_TIME = 3000;
@@ -66,7 +66,8 @@ namespace Config {
   const unsigned long LOGIN_SUCCESS_LED_TIME = 2000;
   const unsigned long LOGIN_ERROR_BLINK_TIME = 3000;
   
-
+  byte rfidCard1[] = {0x62, 0xEC, 0xA9, 0x00}; // PMV Alto
+  byte rfidCard2[] = {0x43, 0x68, 0xAB, 0xA1}; // PMV Bajo
 }
 
 // ==================== ENUMERACIONES ====================
@@ -526,11 +527,9 @@ public:
 };
 
 
-
 class RFIDManager {
 private:
   MFRC522 mfrc522;
-  MFRC522::MIFARE_Key key;
   
 public:
   RFIDManager() : mfrc522(Hardware::RFID_SS_PIN, Hardware::RFID_RST_PIN) {}
@@ -538,11 +537,6 @@ public:
   void begin() {
     SPI.begin();
     mfrc522.PCD_Init();
-    
-    // Preparar la clave por defecto (generalmente es FF FF FF FF FF FF)
-    for (byte i = 0; i < 6; i++) {
-      key.keyByte[i] = 0xFF;
-    }
   }
   
   SystemInput checkCards() {
@@ -550,89 +544,38 @@ public:
       return INPUT_UNKNOWN;
     }
     
-    // Seleccionar la tarjeta
-    if (mfrc522.PICC_GetType(mfrc522.uid.sak) != MFRC522::PICC_TYPE_MIFARE_MINI &&
-        mfrc522.PICC_GetType(mfrc522.uid.sak) != MFRC522::PICC_TYPE_MIFARE_1K &&
-        mfrc522.PICC_GetType(mfrc522.uid.sak) != MFRC522::PICC_TYPE_MIFARE_4K) {
-      mfrc522.PICC_HaltA();
-      return INPUT_UNKNOWN;
-    }
+    byte *uid = mfrc522.uid.uidByte;
+    byte uidSize = mfrc522.uid.size;
     
-    // Autenticar usando la clave A
-    byte status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, 6, &key, &(mfrc522.uid));
-    if (status != MFRC522::STATUS_OK) {
-      Serial.print("Fallo en autenticación: ");
-      Serial.println(mfrc522.GetStatusCodeName(status));
-      mfrc522.PICC_HaltA();
-      return INPUT_UNKNOWN;
-    }
-    
-    // Leer el bloque 6
-    byte buffer[18];
-    byte size = sizeof(buffer);
-    status = mfrc522.MIFARE_Read(6, buffer, &size);
-    
-    SystemInput result = INPUT_UNKNOWN;
-    
-    if (status == MFRC522::STATUS_OK) {
-      // Verificar el primer byte del bloque 6
-      if (buffer[0] == 1) {
-        Serial.println("Tarjeta PMV_ALTO detectada (valor: 1)");
-        result = INPUT_TEMP_HIGH;
-      } else if (buffer[0] == 2) {
-        Serial.println("Tarjeta PMV_BAJO detectada (valor: 2)");
-        result = INPUT_TEMP_LOW;
-      } else {
-        Serial.print("Valor desconocido en bloque 6: ");
-        Serial.println(buffer[0]);
+    // Verificar tarjeta PMV Alto
+    bool isCard1 = true;
+    for (byte i = 0; i < uidSize && i < 4; i++) {
+      if (uid[i] != Config::rfidCard1[i]) {
+        isCard1 = false;
+        break;
       }
-    } else {
-      Serial.print("Error leyendo bloque: ");
-      Serial.println(mfrc522.GetStatusCodeName(status));
     }
     
-    // Detener la comunicación con la tarjeta
-    mfrc522.PICC_HaltA();
-    mfrc522.PCD_StopCrypto1();
-    
-    return result;
-  }
-
-
-  //METODO PARA ESCRIBIR LOS VALORES A LAS TARGETAS
-  bool writeValueToCard(byte value) {
-    if (!mfrc522.PICC_IsNewCardPresent() || !mfrc522.PICC_ReadCardSerial()) {
-      return false;
-    }
-    
-    // Autenticar
-    byte status = mfrc522.PCD_Authenticate(MFRC522::PICC_CMD_MF_AUTH_KEY_A, 6, &key, &(mfrc522.uid));
-    if (status != MFRC522::STATUS_OK) {
-      mfrc522.PICC_HaltA();
-      return false;
-    }
-    
-    // Preparar datos (16 bytes, solo el primero tiene el valor)
-    byte dataBlock[16] = {0};
-    dataBlock[0] = value;
-    
-    // Escribir el bloque
-    status = mfrc522.MIFARE_Write(6, dataBlock, 16);
-    bool success = (status == MFRC522::STATUS_OK);
-    
-    if (success) {
-      Serial.print("Valor ");
-      Serial.print(value);
-      Serial.println(" escrito correctamente en bloque 6");
-    } else {
-      Serial.print("Error escribiendo: ");
-      Serial.println(mfrc522.GetStatusCodeName(status));
+    // Verificar tarjeta PMV Bajo
+    bool isCard2 = true;
+    for (byte i = 0; i < uidSize && i < 4; i++) {
+      if (uid[i] != Config::rfidCard2[i]) {
+        isCard2 = false;
+        break;
+      }
     }
     
     mfrc522.PICC_HaltA();
-    mfrc522.PCD_StopCrypto1();
     
-    return success;
+    if (isCard1) {
+      Serial.println("Tarjeta PMV_ALTO detectada");
+      return INPUT_TEMP_HIGH;
+    } else if (isCard2) {
+      Serial.println("Tarjeta PMV_BAJO detectada");
+      return INPUT_TEMP_LOW;
+    }
+    
+    return INPUT_UNKNOWN;
   }
 };
 
@@ -716,11 +659,11 @@ AsyncTask taskKeypad(100, true, []() {
 
 AsyncTask taskRFID(100, true, []() {
   if (stateMachine.GetState() == STATE_MONITORING) {
-    rfid.writeValueToCard(1);
-    //SystemInput rfidInput = rfid.checkCards();
-    //if (rfidInput != INPUT_UNKNOWN) {
-    //  currentInput = rfidInput;
-    //}
+    //rfid.writeValueToCard(1);
+    SystemInput rfidInput = rfid.checkCards();
+    if (rfidInput != INPUT_UNKNOWN) {
+      currentInput = rfidInput;
+    }
   }
 });
 
